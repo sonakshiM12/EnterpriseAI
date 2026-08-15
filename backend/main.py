@@ -1,10 +1,12 @@
+
+```python
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 import chromadb
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -23,17 +25,17 @@ load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
 
 if not api_key:
-    raise ValueError("GROQ_API_KEY not found in .env file")
+    raise ValueError("GROQ_API_KEY environment variable not found")
 
 
 # ==========================================================
-# 2. APP
+# 2. FASTAPI
 # ==========================================================
 
 app = FastAPI(
     title="Enterprise AI Knowledge Assistant",
     description="AI-powered Enterprise RAG Knowledge Assistant",
-    version="4.0"
+    version="5.0"
 )
 
 
@@ -75,16 +77,14 @@ os.makedirs(
 
 
 # ==========================================================
-# 5. MODELS
+# 5. LIGHTWEIGHT CHROMA EMBEDDING
 # ==========================================================
 
-print("Loading embedding model...")
+print("Loading lightweight embedding function...")
 
-embedding_model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
+embedding_function = DefaultEmbeddingFunction()
 
-print("Embedding model loaded successfully!")
+print("Embedding function ready!")
 
 
 # ==========================================================
@@ -98,7 +98,8 @@ chroma_client = chromadb.PersistentClient(
 )
 
 collection = chroma_client.get_or_create_collection(
-    name="enterprise_documents"
+    name="enterprise_documents",
+    embedding_function=embedding_function
 )
 
 print("ChromaDB connected successfully!")
@@ -131,7 +132,8 @@ def home():
 
     return {
         "success": True,
-        "message": "Enterprise AI Knowledge Assistant is running!"
+        "message": "Enterprise AI Knowledge Assistant is running!",
+        "status": "online"
     }
 
 
@@ -267,10 +269,13 @@ def get_document_count():
             include=["metadatas"]
         )
 
-        metadatas = result.get(
-            "metadatas",
-            []
-        ) or []
+        metadatas = (
+            result.get(
+                "metadatas",
+                []
+            )
+            or []
+        )
 
         names = set()
 
@@ -283,11 +288,14 @@ def get_document_count():
                 )
 
                 if source:
-                    names.add(source)
+
+                    names.add(
+                        source
+                    )
 
         return len(names)
 
-    except:
+    except Exception:
 
         return 0
 
@@ -333,7 +341,9 @@ async def upload_pdf(
             "wb"
         ) as buffer:
 
-            buffer.write(content)
+            buffer.write(
+                content
+            )
 
     except Exception as e:
 
@@ -341,6 +351,11 @@ async def upload_pdf(
             "success": False,
             "error": f"Could not save PDF: {str(e)}"
         }
+
+
+    # ======================================================
+    # READ PDF
+    # ======================================================
 
     try:
 
@@ -355,17 +370,23 @@ async def upload_pdf(
             "error": f"Could not read PDF: {str(e)}"
         }
 
-    # Remove old version
+
+    # ======================================================
+    # DELETE OLD VERSION
+    # ======================================================
+
     delete_document_chunks(
         filename
     )
+
 
     all_chunks = []
     all_metadatas = []
     all_ids = []
 
+
     # ======================================================
-    # PAGE PROCESSING
+    # PROCESS PAGES
     # ======================================================
 
     for page_number, page in enumerate(
@@ -389,18 +410,23 @@ async def upload_pdf(
 
             page_text = ""
 
+
         page_text = clean_text(
             page_text
         )
 
+
         if not page_text:
+
             continue
+
 
         page_chunks = create_chunks(
             page_text,
             chunk_size=250,
             overlap=50
         )
+
 
         for chunk_number, chunk in enumerate(
             page_chunks
@@ -412,9 +438,11 @@ async def upload_pdf(
                 f"_chunk_{chunk_number}"
             )
 
+
             all_chunks.append(
                 chunk
             )
+
 
             all_metadatas.append(
                 {
@@ -424,9 +452,11 @@ async def upload_pdf(
                 }
             )
 
+
             all_ids.append(
                 chunk_id
             )
+
 
     if not all_chunks:
 
@@ -435,34 +465,28 @@ async def upload_pdf(
             "error": "No readable text found in the PDF."
         }
 
+
     # ======================================================
-    # EMBEDDINGS
+    # STORE DOCUMENTS
+    # CHROMA CREATES EMBEDDINGS
     # ======================================================
 
     print(
-        f"Creating embeddings for {filename}..."
+        f"Indexing {filename}..."
     )
 
-    embeddings = embedding_model.encode(
-        all_chunks,
-        normalize_embeddings=True,
-        show_progress_bar=True
-    ).tolist()
-
-    # ======================================================
-    # STORE
-    # ======================================================
 
     collection.upsert(
         ids=all_ids,
         documents=all_chunks,
-        embeddings=embeddings,
         metadatas=all_metadatas
     )
+
 
     print(
         f"Successfully indexed {filename}"
     )
+
 
     return {
 
@@ -498,12 +522,14 @@ def get_documents():
 
         metadatas = (
             result.get(
-                "metadatas"
+                "metadatas",
+                []
             )
             or []
         )
 
         document_data = {}
+
 
         for metadata in metadatas:
 
@@ -517,17 +543,24 @@ def get_documents():
             if not source:
                 continue
 
+
             if source not in document_data:
 
                 document_data[source] = {
+
                     "filename": source,
+
                     "pages": set(),
+
                     "chunks": 0
+
                 }
+
 
             page = metadata.get(
                 "page"
             )
+
 
             if page is not None:
 
@@ -535,24 +568,35 @@ def get_documents():
                     page
                 )
 
+
             document_data[source]["chunks"] += 1
 
+
         documents = []
+
 
         for filename, info in document_data.items():
 
             documents.append(
+
                 {
                     "filename": filename,
-                    "pages": len(info["pages"]),
+
+                    "pages": len(
+                        info["pages"]
+                    ),
+
                     "chunks": info["chunks"]
                 }
+
             )
+
 
         documents.sort(
             key=lambda x:
             x["filename"].lower()
         )
+
 
         return {
 
@@ -560,9 +604,12 @@ def get_documents():
 
             "documents": documents,
 
-            "count":
-            len(documents)
+            "count": len(
+                documents
+            )
+
         }
+
 
     except Exception as e:
 
@@ -573,6 +620,7 @@ def get_documents():
             "documents": [],
 
             "error": str(e)
+
         }
 
 
@@ -593,18 +641,22 @@ def delete_document(
             filename
         )
 
+
         deleted_chunks = (
             delete_document_chunks(
                 filename
             )
         )
 
+
         file_path = os.path.join(
             UPLOAD_FOLDER,
             filename
         )
 
+
         file_deleted = False
+
 
         if os.path.exists(
             file_path
@@ -615,6 +667,7 @@ def delete_document(
             )
 
             file_deleted = True
+
 
         return {
 
@@ -630,7 +683,9 @@ def delete_document(
 
             "message":
             "Document deleted successfully."
+
         }
+
 
     except Exception as e:
 
@@ -640,6 +695,7 @@ def delete_document(
 
             "error":
             f"Could not delete document: {str(e)}"
+
         }
 
 
@@ -665,31 +721,56 @@ def calculate_rag_quality(
     if not distances:
 
         return {
+
             "score": 0,
-            "status": "NO_RETRIEVAL"
+
+            "status": "NO_RETRIEVAL",
+
+            "average_distance": 0
+
         }
 
+
     average_distance = (
+
         sum(distances)
+
         /
+
         len(distances)
+
     )
+
 
     score = (
+
         1 /
+
         (1 + average_distance)
+
     ) * 100
 
+
     score = round(
+
         max(
+
             0,
+
             min(
+
                 score,
+
                 100
+
             )
+
         ),
+
         2
+
     )
+
 
     if score >= 70:
 
@@ -703,6 +784,7 @@ def calculate_rag_quality(
 
         status = "LOW"
 
+
     return {
 
         "score": score,
@@ -714,6 +796,7 @@ def calculate_rag_quality(
             average_distance,
             4
         )
+
     }
 
 
@@ -732,6 +815,7 @@ async def ask_ai(
         data.document_filter
     )
 
+
     if not question:
 
         return {
@@ -742,9 +826,12 @@ async def ask_ai(
             "Please enter a question.",
 
             "sources": []
+
         }
 
+
     total_chunks = collection.count()
+
 
     if total_chunks == 0:
 
@@ -756,7 +843,9 @@ async def ask_ai(
             "Please upload a PDF before asking a question.",
 
             "sources": []
+
         }
+
 
     # ======================================================
     # DOCUMENT FILTER
@@ -764,51 +853,54 @@ async def ask_ai(
 
     filter_condition = None
 
+
     if selected_documents:
 
         if len(selected_documents) == 1:
 
             filter_condition = {
-                "source": selected_documents[0]
+
+                "source":
+                selected_documents[0]
+
             }
 
         else:
 
             filter_condition = {
+
                 "$or": [
+
                     {
-                        "source": filename
+
+                        "source":
+                        filename
+
                     }
-                    for filename in selected_documents
+
+                    for filename
+                    in selected_documents
+
                 ]
+
             }
 
-    # ======================================================
-    # QUESTION EMBEDDING
-    # ======================================================
-
-    question_embedding = (
-        embedding_model
-        .encode(
-            question,
-            normalize_embeddings=True
-        )
-        .tolist()
-    )
-
-    number_of_results = min(
-        12,
-        total_chunks
-    )
 
     # ======================================================
     # RETRIEVAL
+    # CHROMA CREATES QUESTION EMBEDDING
     # ======================================================
+
+    number_of_results = min(
+        8,
+        total_chunks
+    )
+
 
     query_arguments = {
 
-        "query_embeddings": [
-            question_embedding
+        "query_texts": [
+            question
         ],
 
         "n_results":
@@ -819,36 +911,71 @@ async def ask_ai(
             "metadatas",
             "distances"
         ]
+
     }
+
 
     if filter_condition:
 
-        query_arguments["where"] = filter_condition
+        query_arguments["where"] = (
+            filter_condition
+        )
 
-    results = collection.query(
-        **query_arguments
-    )
+
+    try:
+
+        results = collection.query(
+            **query_arguments
+        )
+
+    except Exception as e:
+
+        print(
+            "Retrieval error:",
+            e
+        )
+
+        return {
+
+            "success": False,
+
+            "answer":
+            f"Retrieval error: {str(e)}",
+
+            "sources": []
+
+        }
+
 
     documents = (
+
         results.get(
             "documents",
             [[]]
         )[0]
+
     )
 
+
     metadatas = (
+
         results.get(
             "metadatas",
             [[]]
         )[0]
+
     )
 
+
     distances = (
+
         results.get(
             "distances",
             [[]]
         )[0]
+
     )
+
 
     if not documents:
 
@@ -871,22 +998,27 @@ async def ask_ai(
                 "NO_RETRIEVAL",
 
                 "chunks_retrieved": 0
+
             }
+
         }
 
+
     # ======================================================
-    # QUALITY
+    # RAG QUALITY
     # ======================================================
 
     rag_quality = calculate_rag_quality(
         distances
     )
 
+
     # ======================================================
-    # BUILD CONTEXT WITH SOURCE IDs
+    # BUILD CONTEXT
     # ======================================================
 
     context_parts = []
+
 
     for i in range(
         len(documents)
@@ -894,20 +1026,24 @@ async def ask_ai(
 
         metadata = metadatas[i]
 
+
         source = metadata.get(
             "source",
             "Unknown"
         )
+
 
         page = metadata.get(
             "page",
             "Unknown"
         )
 
+
         chunk_number = metadata.get(
             "chunk",
             0
         )
+
 
         context_parts.append(
 
@@ -920,11 +1056,14 @@ CHUNK: {chunk_number}
 CONTENT:
 {documents[i]}
 """
+
         )
+
 
     context = "\n".join(
         context_parts
     )
+
 
     # ======================================================
     # GROUNDED PROMPT
@@ -932,11 +1071,12 @@ CONTENT:
 
     prompt = f"""
 
-You are EnterpriseAI, a strict enterprise
-document-grounded knowledge assistant.
+You are EnterpriseAI,
+a strict enterprise document-grounded
+knowledge assistant.
 
-Answer the user's question ONLY using
-the retrieved document context below.
+Answer ONLY using the retrieved
+document context.
 
 RULES:
 
@@ -944,31 +1084,33 @@ RULES:
 
 2. Never invent facts.
 
-3. Carefully inspect all retrieved sources.
+3. Carefully inspect the retrieved context.
 
-4. If the answer is present, explain it clearly.
+4. If the answer is present,
+   explain it clearly.
 
-5. Every factual claim should include a source
-   citation in this format:
+5. Every factual claim must contain
+   a citation.
+
+6. Citation format:
 
    [Source 1, Page 5]
 
-6. Use the exact SOURCE_ID provided in the context.
+7. Use only SOURCE_ID values that
+   actually exist.
 
-7. If multiple sources support an answer,
-   cite multiple sources.
+8. If multiple sources support
+   the answer, cite them.
 
-8. If the context does not contain enough
-   information, say:
+9. If the answer cannot be found,
+   say exactly:
 
-"I couldn't find this information in the uploaded documents."
+   I couldn't find this information
+   in the uploaded documents.
 
-9. Do not create fake citations.
+10. Never create fake citations.
 
-10. Do not cite sources that do not support
-    the statement.
-
-RETRIEVED DOCUMENT CONTEXT:
+RETRIEVED CONTEXT:
 
 {context}
 
@@ -978,6 +1120,7 @@ USER QUESTION:
 
 """
 
+
     # ======================================================
     # GROQ
     # ======================================================
@@ -985,6 +1128,7 @@ USER QUESTION:
     try:
 
         response = (
+
             groq_client
             .chat
             .completions
@@ -996,35 +1140,43 @@ USER QUESTION:
                 messages=[
 
                     {
+
                         "role":
                         "system",
 
                         "content":
                         """
-You are a strict document-grounded
+You are a strict
+document-grounded
 Enterprise AI assistant.
 
 Never hallucinate.
 Never use outside knowledge.
-Always cite the supplied source IDs.
+Always use citations.
 """
+
                     },
 
                     {
+
                         "role":
                         "user",
 
                         "content":
                         prompt
+
                     }
 
                 ],
 
                 temperature=0,
 
-                max_tokens=1200
+                max_tokens=1000
+
             )
+
         )
+
 
     except Exception as e:
 
@@ -1041,15 +1193,20 @@ Always cite the supplied source IDs.
             f"AI service error: {str(e)}",
 
             "sources": []
+
         }
 
+
     answer = (
+
         response
         .choices[0]
         .message
         .content
         .strip()
+
     )
+
 
     # ======================================================
     # SOURCES
@@ -1057,11 +1214,13 @@ Always cite the supplied source IDs.
 
     sources = []
 
+
     for i in range(
         len(metadatas)
     ):
 
         metadata = metadatas[i]
+
 
         sources.append(
 
@@ -1100,21 +1259,25 @@ Always cite the supplied source IDs.
 
         )
 
+
     # ======================================================
     # UNIQUE DOCUMENTS
     # ======================================================
 
     unique_documents = []
 
+
     for source in sources:
 
         filename = source["source"]
+
 
         if filename not in unique_documents:
 
             unique_documents.append(
                 filename
             )
+
 
     # ======================================================
     # CHAT HISTORY
@@ -1134,6 +1297,9 @@ Always cite the supplied source IDs.
         "documents":
         unique_documents,
 
+        "retrieval_score":
+        rag_quality["score"],
+
         "timestamp":
         datetime.now().strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -1141,14 +1307,16 @@ Always cite the supplied source IDs.
 
     }
 
+
     chat_history.append(
         history_item
     )
 
-    # Keep last 100 conversations
+
     if len(chat_history) > 100:
 
         chat_history.pop(0)
+
 
     # ======================================================
     # RESPONSE
@@ -1190,7 +1358,7 @@ Always cite the supplied source IDs.
 
 
 # ==========================================================
-# 21. CHAT HISTORY API
+# 21. CHAT HISTORY
 # ==========================================================
 
 @app.get("/chat-history")
@@ -1206,6 +1374,7 @@ def get_chat_history():
                 chat_history
             )
         )
+
     }
 
 
@@ -1224,6 +1393,7 @@ def clear_chat_history():
 
         "message":
         "Chat history cleared successfully."
+
     }
 
 
@@ -1240,29 +1410,39 @@ def statistics():
             include=["metadatas"]
         )
 
+
         metadatas = (
+
             result.get(
                 "metadatas",
                 []
             )
+
             or []
+
         )
 
+
         documents = set()
+
         pages = set()
+
 
         for metadata in metadatas:
 
             if not metadata:
                 continue
 
+
             source = metadata.get(
                 "source"
             )
 
+
             page = metadata.get(
                 "page"
             )
+
 
             if source:
 
@@ -1270,11 +1450,41 @@ def statistics():
                     source
                 )
 
+
             if source and page:
 
                 pages.add(
                     f"{source}_{page}"
                 )
+
+
+        scores = [
+
+            h.get(
+                "retrieval_score",
+                0
+            )
+
+            for h in chat_history
+
+        ]
+
+
+        average_score = (
+
+            round(
+                sum(scores)
+                /
+                len(scores),
+                2
+            )
+
+            if scores
+
+            else 0
+
+        )
+
 
         return {
 
@@ -1293,23 +1503,10 @@ def statistics():
             len(chat_history),
 
             "average_retrieval_score":
-            round(
-                (
-                    sum(
-                        h.get(
-                            "retrieval_score",
-                            0
-                        )
-                        for h in chat_history
-                    )
-                    /
-                    len(chat_history)
-                ),
-                2
-            )
-            if chat_history
-            else 0
+            average_score
+
         }
+
 
     except Exception as e:
 
@@ -1319,4 +1516,6 @@ def statistics():
 
             "error":
             str(e)
+
         }
+
