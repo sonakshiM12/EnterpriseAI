@@ -1,14 +1,13 @@
-from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
-import chromadb
 import os
+import json
+import re
 
+from pypdf import PdfReader
 
-# ==========================================================
-# 1. FOLDER SETTINGS
-# ==========================================================
 
 UPLOAD_FOLDER = "uploads"
+DATA_FILE = "documents.json"
+
 
 os.makedirs(
     UPLOAD_FOLDER,
@@ -16,44 +15,15 @@ os.makedirs(
 )
 
 
-# ==========================================================
-# 2. LOAD EMBEDDING MODEL
-# ==========================================================
-
-print("Loading embedding model...")
-
-embedding_model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
-
-print("Model loaded!")
-
-
-# ==========================================================
-# 3. CONNECT TO CHROMADB
-# ==========================================================
-
-chroma_client = chromadb.PersistentClient(
-    path="chroma_db"
-)
-
-collection = chroma_client.get_or_create_collection(
-    name="enterprise_documents"
-)
-
-print("Connected to ChromaDB!")
-
-
-# ==========================================================
-# 4. PROCESS PDF
-# ==========================================================
-
 def process_pdf(file_path):
 
-    print(f"\nProcessing: {file_path}")
+    print(
+        f"\nProcessing: {file_path}"
+    )
 
-    # Read PDF
-    reader = PdfReader(file_path)
+    reader = PdfReader(
+        file_path
+    )
 
     text = ""
 
@@ -66,17 +36,14 @@ def process_pdf(file_path):
             text += page_text + "\n"
 
 
-    # Check text
     if not text.strip():
 
-        print("No readable text found.")
+        print(
+            "No readable text found."
+        )
 
         return
 
-
-    # ======================================================
-    # 5. SPLIT TEXT INTO CHUNKS
-    # ======================================================
 
     words = text.split()
 
@@ -100,77 +67,72 @@ def process_pdf(file_path):
             chunks.append(chunk)
 
 
-    print(
-        f"Created {len(chunks)} chunks."
-    )
-
-
-    # ======================================================
-    # 6. CREATE EMBEDDINGS
-    # ======================================================
-
-    embeddings = embedding_model.encode(
-        chunks
-    ).tolist()
-
-
-    # ======================================================
-    # 7. CREATE IDs
-    # ======================================================
-
     filename = os.path.basename(
         file_path
     )
 
-    ids = []
 
-    for i in range(
-        len(chunks)
-    ):
+    documents = []
 
-        ids.append(
-            filename
-            + "_chunk_"
-            + str(i)
+    if os.path.exists(DATA_FILE):
+
+        try:
+
+            with open(
+                DATA_FILE,
+                "r",
+                encoding="utf-8"
+            ) as f:
+
+                documents = json.load(f)
+
+        except Exception:
+
+            documents = []
+
+
+    # Remove old version
+    documents = [
+        document
+        for document in documents
+        if document["source"] != filename
+    ]
+
+
+    # Add new chunks
+    for i, chunk in enumerate(chunks):
+
+        documents.append(
+            {
+                "source": filename,
+                "chunk": i,
+                "content": chunk
+            }
         )
 
 
-    # ======================================================
-    # 8. STORE IN CHROMADB
-    # ======================================================
+    with open(
+        DATA_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
 
-    collection.upsert(
-
-        ids=ids,
-
-        documents=chunks,
-
-        embeddings=embeddings,
-
-        metadatas=[
-
-            {
-                "source": filename,
-                "chunk": i
-            }
-
-            for i in range(
-                len(chunks)
-            )
-
-        ]
-
-    )
+        json.dump(
+            documents,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
 
 
     print(
-        f"Successfully stored {filename} in ChromaDB!"
+        f"Successfully stored {filename}"
     )
 
+    print(
+        f"Created {len(chunks)} chunks."
+    )
 
-# ==========================================================
-# 9. PROCESS ALL PDFs
-# ==========================================================
 
 if __name__ == "__main__":
 
@@ -209,4 +171,6 @@ if __name__ == "__main__":
             )
 
 
-    print("\nPDF processing completed!")
+    print(
+        "\nPDF processing completed!"
+    )

@@ -1,8 +1,0 @@
-fastapi
-uvicorn[standard]
-python-multipart
-pypdf
-sentence-transformers
-chromadb
-python-dotenv
-groq
