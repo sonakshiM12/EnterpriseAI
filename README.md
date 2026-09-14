@@ -1,4 +1,4 @@
-# EnterpriseAI – AI-Powered Enterprise Knowledge Assistant
+# EnterpriseAI – AI-Powered Knowledge Management & Context-Aware Assistant
 
 EnterpriseAI is a **Retrieval-Augmented Generation (RAG)** application that allows organizations to upload PDF documents and ask questions in natural language. It retrieves the most relevant document sections using semantic search and generates grounded answers with source citations.
 
